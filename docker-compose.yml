@@ -1,0 +1,12 @@
+
+version: "3.9"
+services:
+  awm:
+    build: .
+    container_name: awm
+    environment:
+      - DB_URL=sqlite:///./awm.db
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/app
