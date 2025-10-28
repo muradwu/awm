@@ -477,6 +477,33 @@ def api_po_labeling(body: LabelingIn, db: Session = Depends(get_db)):
 
 @app.post("/admin/run-seed")
 def run_seed(db: Session = Depends(get_db)):
-    from ..scripts import seed_demo
-    seed_demo.run(db)
-    return {"ok": True, "message": "Demo data seeded"}
+    """
+    Seeds demo data directly from scripts/seed_demo.py
+    Compatible with Render Free plan (no shell).
+    """
+    try:
+        import importlib.util, os, sys
+        from pathlib import Path
+
+        base_dir = Path(__file__).resolve().parents[2]
+        script_path = base_dir / "scripts" / "seed_demo.py"
+
+        if not script_path.exists():
+            return {"ok": False, "error": "seed_demo.py not found"}
+
+        spec = importlib.util.spec_from_file_location("seed_demo", script_path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["seed_demo"] = module
+        spec.loader.exec_module(module)
+
+        if hasattr(module, "run"):
+            module.run(db)
+            return {"ok": True, "message": "Demo data successfully seeded"}
+        elif hasattr(module, "main"):
+            module.main()
+            return {"ok": True, "message": "seed_demo.main() executed"}
+        else:
+            return {"ok": False, "error": "seed_demo has no run() or main()"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
