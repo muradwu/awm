@@ -1,19 +1,20 @@
 from __future__ import annotations
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
 from ..db import get_db, init_db
 from ..services import purchase_orders as po_svc
+from ..services import accounting as acc_svc
+from ..services import sales as sales_svc
 
 app = FastAPI(title="AWM API")
-
 
 # ---------- авто-инициализация БД ----------
 @app.on_event("startup")
 def _startup_create_tables():
     init_db()
-
 
 # ---------- модели запросов ----------
 class POItemIn(BaseModel):
@@ -27,7 +28,6 @@ class POItemIn(BaseModel):
     shipping: float | None = 0.0
     discount: float | None = 0.0
 
-
 class POCreate(BaseModel):
     supplier_name: str | None = None
     po_name: str
@@ -38,16 +38,38 @@ class POCreate(BaseModel):
     discount: float | None = 0.0
     items: list[POItemIn]
 
-
 class POStatusPatch(BaseModel):
     status: str
-
 
 class LabelingIn(BaseModel):
     po_item_id: int
     note: str | None = None
     cost_total: float
 
+class GLIn(BaseModel):
+    date: str | None = None
+    nc_code: str
+    account_name: str
+    reference: str | None = None
+    description: str | None = None
+    amount: float | None = 0.0
+    dr: float | None = 0.0
+    cr: float | None = 0.0
+    value: float | None = 0.0
+    month: int | None = None
+    year: int | None = None
+
+class PrepaymentIn(BaseModel):
+    date: str | None = None
+    party: str
+    description: str | None = None
+    amount: float | None = 0.0
+    balance: float | None = 0.0
+    month: int | None = None
+    year: int | None = None
+
+class SalesImportIn(BaseModel):
+    records: list[dict]
 
 # ---------- layout ----------
 def render_layout(active: str, content_html: str, title="AWM"):
@@ -57,21 +79,25 @@ def render_layout(active: str, content_html: str, title="AWM"):
         ("Label / Prep", "/label", "label"),
         ("Transportation Costs", "/transport", "transport"),
         ("Inventory", "/inventory", "inventory"),
+        ("—", "#", "sep"),
+        ("Accounting: GL", "/accounting/gl", "gl"),
+        ("Accounting: Prepayments", "/accounting/prepayments", "prepayments"),
+        ("Accounting: TB", "/accounting/tb", "tb"),
+        ("Sales", "/sales", "sales"),
     ]
     sidebar = ""
     for name, link, key in menu_items:
+        if key == "sep":
+            sidebar += '<div style="border-top:1px solid #2a2a2a;margin:12px 0;"></div>'
+            continue
         cls = "active" if key == active else ""
         sidebar += f'<a href="{link}" class="menu-item {cls}">{name}</a>'
-
     return f"""
 <!doctype html><html><head><meta charset="utf-8"/>
 <title>{title}</title>
 <style>
-body {{
-  margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  background:#121212;color:#fff;display:flex;height:100vh;
-}}
-.sidebar{{width:240px;background:#1e1e1e;padding:20px;display:flex;flex-direction:column}}
+body {{ margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#121212;color:#fff;display:flex;height:100vh; }}
+.sidebar{{width:260px;background:#1e1e1e;padding:20px;display:flex;flex-direction:column}}
 .menu-item{{color:#bbb;text-decoration:none;padding:10px 0;display:block;border-left:3px solid transparent}}
 .menu-item.active{{color:#fff;font-weight:600;border-left:3px solid #007bff}}
 .menu-item:hover{{color:#fff}}
@@ -80,8 +106,9 @@ body {{
 table{{width:100%;border-collapse:collapse;color:#fff}}
 th,td{{border-bottom:1px solid #333;padding:8px;text-align:left}}
 th{{background:#2a2a2a}}
-input,button,select{{background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;padding:8px}}
+input,button,select,textarea{{background:#2a2a2a;color:#fff;border:1px solid #444;border-radius:6px;padding:8px}}
 button:hover{{background:#007bff;border-color:#007bff}}
+.flex{{display:flex;gap:8px;align-items:center}}
 </style></head>
 <body>
   <div class="sidebar">
@@ -92,20 +119,19 @@ button:hover{{background:#007bff;border-color:#007bff}}
 </body></html>
 """
 
-
-# ---------- страницы ----------
+# ---------- Pages: basic ----------
 @app.get("/", response_class=HTMLResponse)
 def dashboard_page():
     html = """
     <h1>Dashboard</h1>
     <div class="card">
       <p>Добро пожаловать в Amazon Wholesale Manager.</p>
-      <p>Используйте меню слева для навигации между разделами.</p>
+      <p>Используйте левое меню: PO, Label/Prep, Transport, Inventory, Accounting (GL/Prepayments/TB) и Sales.</p>
     </div>
     """
     return HTMLResponse(render_layout("dashboard", html))
 
-
+# ---------- Purchase Orders (та же версия с таблицей ASIN) ----------
 @app.get("/po", response_class=HTMLResponse)
 def po_page():
     html = """
@@ -202,7 +228,7 @@ loadPOs();addItem();
     """
     return HTMLResponse(render_layout("po", html, "Purchase Orders"))
 
-
+# ---------- Label / Transport / Inventory (как раньше-списочно) ----------
 @app.get("/label", response_class=HTMLResponse)
 def label_page(db: Session = Depends(get_db)):
     items = db.query(po_svc.PurchaseOrderItem).all()
@@ -217,7 +243,6 @@ def label_page(db: Session = Depends(get_db)):
     """
     return HTMLResponse(render_layout("label", html, "Label / Prep"))
 
-
 @app.get("/transport", response_class=HTMLResponse)
 def transport_page(db: Session = Depends(get_db)):
     items = db.query(po_svc.PurchaseOrderItem).all()
@@ -231,7 +256,6 @@ def transport_page(db: Session = Depends(get_db)):
     </div>
     """
     return HTMLResponse(render_layout("transport", html, "Transportation Costs"))
-
 
 @app.get("/inventory", response_class=HTMLResponse)
 def inventory_page(db: Session = Depends(get_db)):
@@ -248,6 +272,221 @@ def inventory_page(db: Session = Depends(get_db)):
     """
     return HTMLResponse(render_layout("inventory", html, "Inventory"))
 
+# ---------- Accounting: GL ----------
+@app.get("/accounting/gl", response_class=HTMLResponse)
+def accounting_gl_page(month: int | None = Query(None), year: int | None = Query(None), db: Session = Depends(get_db)):
+    rows_data = acc_svc.list_gl(db, month=month, year=year)
+    rows = ""
+    for r in rows_data:
+        rows += f"<tr><td>{r['date'][:10]}</td><td>{r['nc_code']}</td><td>{r['account_name']}</td><td>{r['reference'] or ''}</td><td>{r['description'] or ''}</td><td>{r['amount']:.2f}</td><td>{r['dr']:.2f}</td><td>{r['cr']:.2f}</td><td>{r['value']:.2f}</td><td>{r['month']}/{r['year']}</td></tr>"
+
+    html = f"""
+    <h1>Accounting — GL</h1>
+    <div class='card'>
+      <form class='flex' onsubmit="return goFilter()">
+        <input id="m" placeholder="Month (1-12)" value="{month or ''}">
+        <input id="y" placeholder="Year (YYYY)" value="{year or ''}">
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+    <div class='card'>
+      <h3>New GL Transaction</h3>
+      <form id="glForm" onsubmit="return createGL(event)">
+        <input name="date" type="date">
+        <input name="nc_code" placeholder="NC code *" required>
+        <input name="account_name" placeholder="Account Name *" required>
+        <input name="reference" placeholder="Reference">
+        <input name="description" placeholder="Description">
+        <input name="amount" placeholder="Amount">
+        <input name="dr" placeholder="Dr">
+        <input name="cr" placeholder="Cr">
+        <input name="value" placeholder="Value">
+        <input name="month" placeholder="Month">
+        <input name="year" placeholder="Year">
+        <button type="submit">Add</button>
+      </form>
+    </div>
+    <div class='card'>
+      <table>
+        <thead><tr><th>Date</th><th>NC</th><th>Account</th><th>Ref</th><th>Description</th><th>Amount</th><th>Dr</th><th>Cr</th><th>Value</th><th>Period</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>
+    <script>
+    function goFilter(){ 
+      const m=document.getElementById('m').value.trim(); 
+      const y=document.getElementById('y').value.trim();
+      const qs = new URLSearchParams(); if(m) qs.set('month',m); if(y) qs.set('year',y);
+      location.href='/accounting/gl'+(qs.toString() ? ('?'+qs.toString()) : ''); 
+      return false;
+    }
+    async function createGL(e){
+      e.preventDefault();
+      const f=new FormData(e.target);
+      const body = Object.fromEntries(f.entries());
+      // пустые числа -> 0
+      for (const k of ["amount","dr","cr","value"]) body[k] = parseFloat(body[k]||0);
+      if (body["month"]) body["month"]=parseInt(body["month"]);
+      if (body["year"]) body["year"]=parseInt(body["year"]);
+      const r=await fetch('/api/gl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!r.ok) return alert(await r.text());
+      location.reload();
+    }
+    </script>
+    """
+    return HTMLResponse(render_layout("gl", html, "Accounting — GL"))
+
+# ---------- Accounting: Prepayments ----------
+@app.get("/accounting/prepayments", response_class=HTMLResponse)
+def accounting_prepayments_page(month: int | None = Query(None), year: int | None = Query(None), db: Session = Depends(get_db)):
+    rows_data = acc_svc.list_prepayments(db, month=month, year=year)
+    rows = ""
+    for r in rows_data:
+        rows += f"<tr><td>{r['date'][:10]}</td><td>{r['party']}</td><td>{r['description'] or ''}</td><td>{r['amount']:.2f}</td><td>{r['balance']:.2f}</td><td>{r['month']}/{r['year']}</td></tr>"
+
+    html = f"""
+    <h1>Accounting — Prepayments</h1>
+    <div class='card'>
+      <form class='flex' onsubmit="return goFilter()">
+        <input id="m" placeholder="Month (1-12)" value="{month or ''}">
+        <input id="y" placeholder="Year (YYYY)" value="{year or ''}">
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+    <div class='card'>
+      <h3>New Prepayment</h3>
+      <form onsubmit="return createPP(event)">
+        <input name="date" type="date">
+        <input name="party" placeholder="Party *" required>
+        <input name="description" placeholder="Description">
+        <input name="amount" placeholder="Amount">
+        <input name="balance" placeholder="Balance">
+        <input name="month" placeholder="Month">
+        <input name="year" placeholder="Year">
+        <button type="submit">Add</button>
+      </form>
+    </div>
+    <div class='card'>
+      <table>
+        <thead><tr><th>Date</th><th>Party</th><th>Description</th><th>Amount</th><th>Balance</th><th>Period</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>
+    <script>
+    function goFilter(){ 
+      const m=document.getElementById('m').value.trim(); 
+      const y=document.getElementById('y').value.trim();
+      const qs = new URLSearchParams(); if(m) qs.set('month',m); if(y) qs.set('year',y);
+      location.href='/accounting/prepayments'+(qs.toString() ? ('?'+qs.toString()) : ''); 
+      return false;
+    }
+    async function createPP(e){
+      e.preventDefault();
+      const f=new FormData(e.target);
+      const body = Object.fromEntries(f.entries());
+      for (const k of ["amount","balance"]) body[k] = parseFloat(body[k]||0);
+      if (body["month"]) body["month"]=parseInt(body["month"]);
+      if (body["year"]) body["year"]=parseInt(body["year"]);
+      const r=await fetch('/api/prepayments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!r.ok) return alert(await r.text());
+      location.reload();
+    }
+    </script>
+    """
+    return HTMLResponse(render_layout("prepayments", html, "Accounting — Prepayments"))
+
+# ---------- Accounting: TB ----------
+@app.get("/accounting/tb", response_class=HTMLResponse)
+def accounting_tb_page(month: int | None = Query(None), year: int | None = Query(None), db: Session = Depends(get_db)):
+    rows_data = acc_svc.tb(db, month=month, year=year)
+    rows = ""
+    for r in rows_data:
+        rows += f"<tr><td>{r['account']}</td><td>{r['dr']:.2f}</td><td>{r['cr']:.2f}</td><td>{r['value']:.2f}</td><td>{r['balance']:.2f}</td></tr>"
+    html = f"""
+    <h1>Accounting — Trial Balance</h1>
+    <div class='card'>
+      <form class='flex' onsubmit="return goFilter()">
+        <input id="m" placeholder="Month (1-12)" value="{month or ''}">
+        <input id="y" placeholder="Year (YYYY)" value="{year or ''}">
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+    <div class='card'>
+      <table>
+        <thead><tr><th>Account</th><th>Dr</th><th>Cr</th><th>Value</th><th>Balance (Dr-Cr)</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>
+    <script>
+    function goFilter(){ 
+      const m=document.getElementById('m').value.trim(); 
+      const y=document.getElementById('y').value.trim();
+      const qs = new URLSearchParams(); if(m) qs.set('month',m); if(y) qs.set('year',y);
+      location.href='/accounting/tb'+(qs.toString() ? ('?'+qs.toString()) : ''); 
+      return false;
+    }
+    </script>
+    """
+    return HTMLResponse(render_layout("tb", html, "Accounting — TB"))
+
+# ---------- Sales ----------
+@app.get("/sales", response_class=HTMLResponse)
+def sales_page(month: int | None = Query(None), year: int | None = Query(None), db: Session = Depends(get_db)):
+    rows_data = sales_svc.list_sales(db, month=month, year=year)
+    rows = ""
+    for s in rows_data:
+        rows += (
+            f"<tr><td>{s['id']}</td><td>{s['date'][:10]}</td><td>{s['asin']}</td><td>{s['description'] or ''}</td>"
+            f"<td>{s['amount']:.2f}</td><td>{s['type'] or ''}</td><td>{s['party'] or ''}</td>"
+            f"<td>{s['month']}</td><td>{s['units_sold']}</td><td>{s['cogs_per_unit']:.2f}</td>"
+            f"<td>{s['fba_fee_per_unit']:.2f}</td><td>{s['amazon_fee_per_unit']:.2f}</td>"
+            f"<td>{s['after_fees_per_unit']:.2f}</td><td>{s['net_per_unit']:.2f}</td>"
+            f"<td>{s['pay_supplier_per_unit']:.2f}</td><td>{s['prep_per_unit']:.2f}</td>"
+            f"<td>{s['ship_to_amz_per_unit']:.2f}</td><td>{s['po_id'] or ''}</td></tr>"
+        )
+
+    html = f"""
+    <h1>Sales</h1>
+    <div class='card'>
+      <form class='flex' onsubmit="return goFilter()">
+        <input id="m" placeholder="Month (1-12)" value="{month or ''}">
+        <input id="y" placeholder="Year (YYYY)" value="{year or ''}">
+        <button type="submit">Filter</button>
+      </form>
+    </div>
+    <div class='card'>
+      <h3>Import from Sellerboard/Amazon (JSON)</h3>
+      <p>Через /api/sales/import можно загрузить массив records[]. Минимум: external_id, date (YYYY-MM-DD), asin, amount, type, party, units_sold.</p>
+      <pre style="white-space:pre-wrap;background:#0f111a;border-radius:8px;padding:10px;border:1px solid #333;">
+POST /api/sales/import
+{"records":[
+  {{"external_id":"A1","date":"2025-10-28","asin":"B00XXXX","description":"Order #1","amount":19.99,"type":"Order","party":"Amazon","units_sold":1}}
+]}
+      </pre>
+    </div>
+    <div class='card'>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Date</th><th>ASIN</th><th>Description</th><th>Amount</th><th>TYPE</th><th>Party</th><th>Month</th>
+            <th>Units sold</th><th>COGS</th><th>FBA</th><th>Amazon fee</th><th>AFTER FEES</th><th>NET per unit</th>
+            <th>Payment to Supplier</th><th>Prep</th><th>Shipping to Amazon</th><th>PO</th>
+          </tr>
+        </thead>
+        <tbody>{rows}</tbody>
+      </table>
+    </div>
+    <script>
+    function goFilter(){ 
+      const m=document.getElementById('m').value.trim(); 
+      const y=document.getElementById('y').value.trim();
+      const qs = new URLSearchParams(); if(m) qs.set('month',m); if(y) qs.set('year',y);
+      location.href='/sales'+(qs.toString() ? ('?'+qs.toString()) : ''); 
+      return false;
+    }
+    </script>
+    """
+    return HTMLResponse(render_layout("sales", html, "Sales"))
 
 # ---------- API ----------
 @app.post("/api/purchase-orders")
@@ -258,24 +497,63 @@ def api_po_create(body: POCreate, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.get("/api/purchase-orders")
 def api_po_list(db: Session = Depends(get_db)):
     return po_svc.list_purchase_orders(db)
-
 
 @app.patch("/api/purchase-orders/{po_id}/status")
 def api_po_status(po_id: int, body: POStatusPatch, db: Session = Depends(get_db)):
     po = po_svc.set_po_status(db, po_id, body.status)
     return {"ok": True, "status": po.status.value}
 
-
 @app.post("/api/po/labeling")
 def api_po_labeling(body: LabelingIn, db: Session = Depends(get_db)):
     lc = po_svc.add_labeling_cost(db, body.po_item_id, body.note, body.cost_total)
     return {"ok": True, "labeling_id": lc.id}
 
+# Accounting API
+@app.get("/api/gl")
+def api_gl_list(month: int | None = None, year: int | None = None, db: Session = Depends(get_db)):
+    return acc_svc.list_gl(db, month=month, year=year)
 
+@app.post("/api/gl")
+def api_gl_create(body: GLIn, db: Session = Depends(get_db)):
+    try:
+        r = acc_svc.create_gl(db, body.model_dump())
+        return {"ok": True, "id": r.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/prepayments")
+def api_prepayments_list(month: int | None = None, year: int | None = None, db: Session = Depends(get_db)):
+    return acc_svc.list_prepayments(db, month=month, year=year)
+
+@app.post("/api/prepayments")
+def api_prepayments_create(body: PrepaymentIn, db: Session = Depends(get_db)):
+    try:
+        r = acc_svc.create_prepayment(db, body.model_dump())
+        return {"ok": True, "id": r.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/tb")
+def api_tb(month: int | None = None, year: int | None = None, db: Session = Depends(get_db)):
+    return acc_svc.tb(db, month, year)
+
+# Sales API
+@app.get("/api/sales")
+def api_sales_list(month: int | None = None, year: int | None = None, db: Session = Depends(get_db)):
+    return sales_svc.list_sales(db, month=month, year=year)
+
+@app.post("/api/sales/import")
+def api_sales_import(body: SalesImportIn, db: Session = Depends(get_db)):
+    try:
+        n = sales_svc.upsert_sales(db, body.records)
+        return {"ok": True, "imported": n}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Admin
 @app.post("/admin/init-db")
 def admin_init_db():
     init_db()
