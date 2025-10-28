@@ -5,13 +5,20 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..db import get_db
+from ..db import get_db, init_db
 from ..services import purchase_orders as po_svc
 
 app = FastAPI(title="AWM API")
 
-# ---------- request models ----------
 
+# ---------- авто-инициализация БД ----------
+@app.on_event("startup")
+def _startup_create_tables():
+    # Создаст недостающие таблицы при каждом запуске
+    init_db()
+
+
+# ---------- request models ----------
 class POItemIn(BaseModel):
     asin: str
     listing_title: str
@@ -23,6 +30,7 @@ class POItemIn(BaseModel):
     shipping: float | None = None
     discount: float | None = 0.0
 
+
 class POCreate(BaseModel):
     supplier_name: str | None = None
     po_name: str
@@ -33,16 +41,18 @@ class POCreate(BaseModel):
     discount: float | None = 0.0
     items: list[POItemIn]
 
+
 class POStatusPatch(BaseModel):
     status: str  # NEW | CLOSED
+
 
 class LabelingIn(BaseModel):
     po_item_id: int
     note: str | None = None
     cost_total: float
 
-# ---------- pages ----------
 
+# ---------- pages ----------
 @app.get("/", response_class=HTMLResponse)
 def dashboard_page():
     html = """
@@ -211,6 +221,7 @@ window.addEventListener('DOMContentLoaded',()=>{ addItem(); loadPOs(); });
     """
     return HTMLResponse(html)
 
+
 @app.get("/po/{po_id}", response_class=HTMLResponse)
 def po_detail(po_id: int, db: Session = Depends(get_db)):
     po = po_svc.get_po_with_items(db, po_id)
@@ -231,7 +242,7 @@ input,button{{padding:8px;border:1px solid #ddd;border-radius:8px}}
 </style>
 <script>
 async function setStatus(status) {{
-  await fetch('{"/api/purchase-orders/"}{po.id}/status', {{method:'PATCH', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{status}})}})
+  await fetch('/api/purchase-orders/{po.id}/status', {{method:'PATCH', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{status}})}})
   location.reload();
 }}
 async function addLabeling(e){{
@@ -276,34 +287,39 @@ async function addLabeling(e){{
     """
     return HTMLResponse(html)
 
-# ---------- API ----------
 
+# ---------- API ----------
 @app.post("/api/purchase-orders")
 def api_po_create(body: POCreate, db: Session = Depends(get_db)):
     try:
         po = po_svc.create_purchase_order(db, body.model_dump())
         return {"ok": True, "po_id": po.id}
     except Exception as e:
+        # Вернём понятную ошибку вместо 500
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @app.get("/api/purchase-orders")
 def api_po_list(db: Session = Depends(get_db)):
     return po_svc.list_purchase_orders(db)
+
 
 @app.patch("/api/purchase-orders/{po_id}/status")
 def api_po_status(po_id: int, body: POStatusPatch, db: Session = Depends(get_db)):
     po = po_svc.set_po_status(db, po_id, body.status)
     return {"ok": True, "status": po.status.value}
 
+
 @app.post("/api/po/labeling")
 def api_po_labeling(body: LabelingIn, db: Session = Depends(get_db)):
     lc = po_svc.add_labeling_cost(db, body.po_item_id, body.note, body.cost_total)
     return {"ok": True, "labeling_id": lc.id}
 
-# -------- optional: seed via API (for Free plan) --------
+
+# ---------- admin ----------
 @app.post("/admin/run-seed")
-def run_seed(db: Session = Depends(get_db)):
-    """Exec seed_demo.py without shell (works on Render Free)."""
+def admin_run_seed(db: Session = Depends(get_db)):
+    """Выполняет scripts/seed_demo.py без shell (Render Free)."""
     try:
         import importlib.util, sys
         from pathlib import Path
@@ -324,3 +340,10 @@ def run_seed(db: Session = Depends(get_db)):
         return {"ok": True}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/admin/init-db")
+def admin_init_db():
+    """Явно создать недостающие таблицы (idempotent)."""
+    init_db()
+    return {"ok": True, "message": "DB initialized (tables created if missing)"}
