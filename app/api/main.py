@@ -474,3 +474,9 @@ def api_po_status(po_id: int, body: POStatusPatch, db: Session = Depends(get_db)
 def api_po_labeling(body: LabelingIn, db: Session = Depends(get_db)):
     lc = po_svc.add_labeling_cost(db, body.po_item_id, body.note, body.cost_total)
     return {"ok": True, "labeling_id": lc.id}
+
+@app.post("/admin/run-seed")
+def run_seed(db: Session = Depends(get_db)):
+    from ..scripts import seed_demo
+    seed_demo.run(db)
+    return {"ok": True, "message": "Demo data seeded"}
