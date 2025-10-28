@@ -459,10 +459,11 @@ def sales_page(month: int | None = Query(None), year: int | None = Query(None), 
       <p>Через /api/sales/import можно загрузить массив records[]. Минимум: external_id, date (YYYY-MM-DD), asin, amount, type, party, units_sold.</p>
       <pre style="white-space:pre-wrap;background:#0f111a;border-radius:8px;padding:10px;border:1px solid #333;">
 POST /api/sales/import
-{"records":[
+{{"records":[
   {{"external_id":"A1","date":"2025-10-28","asin":"B00XXXX","description":"Order #1","amount":19.99,"type":"Order","party":"Amazon","units_sold":1}}
-]}
-      </pre>
+]}}
+</pre>
+
     </div>
     <div class='card'>
       <table>
