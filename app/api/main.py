@@ -202,6 +202,12 @@ DASHBOARD_HTML = """
   </style>
 </head>
 <body>
+  <nav style="display:flex;gap:12px;align-items:center;margin-bottom:12px">
+    <a href="/" style="text-decoration:none;font-weight:700">Dashboard</a>
+    <span style="color:#aaa">•</span>
+    <a href="/po" style="text-decoration:none">Purchase Orders</a>
+  </nav>
+
   <h1>AWM — Dashboard <span class="muted" id="period"></span></h1>
   <div class="cards">
     <div class="card"><div class="muted">Total Revenue</div><div id="totalRevenue" style="font-size:1.6rem;font-weight:700">—</div></div>
