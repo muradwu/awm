@@ -128,3 +128,77 @@ class LabelingCost(Base):
 
     def __repr__(self):
         return f"<LabelingCost(po_item_id={self.po_item_id}, cost_total={self.cost_total})>"
+# ---------- GENERAL LEDGER (GL) ----------
+class GLTransaction(Base):
+    __tablename__ = "gl_transactions"
+
+    id = Column(Integer, primary_key=True)
+    date = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    nc_code = Column(String(64), nullable=False)          # NC (код)
+    account_name = Column(String(255), nullable=False)    # Account Name
+    reference = Column(String(255))                       # Reference
+    description = Column(Text)                            # Description
+
+    amount = Column(Float, default=0.0)                   # Amount (введённая сумма)
+    dr = Column(Float, default=0.0)                       # Dr
+    cr = Column(Float, default=0.0)                       # Cr
+    value = Column(Float, default=0.0)                    # Value (можно вычислять)
+
+    month = Column(Integer, nullable=False)               # месяц (1..12)
+    year = Column(Integer, nullable=False)                # год (YYYY)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---------- PREPAYMENTS ----------
+class Prepayment(Base):
+    __tablename__ = "prepayments"
+
+    id = Column(Integer, primary_key=True)
+    date = Column(DateTime, default=datetime.utcnow, nullable=False)
+    party = Column(String(255), nullable=False)           # контрагент
+    description = Column(Text)
+    amount = Column(Float, default=0.0)
+    balance = Column(Float, default=0.0)
+
+    month = Column(Integer, nullable=False)
+    year = Column(Integer, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ---------- SALES ----------
+class SalesRecord(Base):
+    __tablename__ = "sales_records"
+
+    id = Column(Integer, primary_key=True)               # наш внутренний ID
+    external_id = Column(String(128), index=True)        # ID из Amazon/Sellerboard
+    date = Column(DateTime, nullable=False)
+
+    asin = Column(String(64), index=True, nullable=False)
+    description = Column(Text)
+
+    amount = Column(Float, default=0.0)                  # Gross / Amount
+    type = Column(String(64))                            # TYPE (Order/Refund/…)
+    party = Column(String(255))                          # Party / Buyer / Marketplace
+
+    month = Column(Integer, nullable=False)
+    year = Column(Integer, nullable=False)
+
+    units_sold = Column(Integer, default=0)
+    cogs_per_unit = Column(Float, default=0.0)
+    fba_fee_per_unit = Column(Float, default=0.0)
+    amazon_fee_per_unit = Column(Float, default=0.0)
+
+    after_fees_per_unit = Column(Float, default=0.0)
+    net_per_unit = Column(Float, default=0.0)
+
+    pay_supplier_per_unit = Column(Float, default=0.0)
+    prep_per_unit = Column(Float, default=0.0)
+    ship_to_amz_per_unit = Column(Float, default=0.0)
+
+    po_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=True)
+    po_item_id = Column(Integer, ForeignKey("purchase_order_items.id"), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
