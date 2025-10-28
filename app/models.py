@@ -75,3 +75,64 @@ class MetricSnapshot(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     product: Mapped["Product"] = relationship(back_populates="metrics")
+
+# --- ПОСЛЕ существующих моделей добавь это ---
+
+from sqlalchemy import Boolean
+
+class POStatus(str, enum.Enum):
+    NEW = "NEW"
+    CLOSED = "CLOSED"
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    supplier_id: Mapped[int | None] = mapped_column(ForeignKey("suppliers.id"), nullable=True)
+    supplier: Mapped["Supplier"] = relationship()
+    name: Mapped[str] = mapped_column(String, index=True)               # Название Purchase Order
+    invoice_number: Mapped[str | None] = mapped_column(String)
+    order_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    status: Mapped[POStatus] = mapped_column(Enum(POStatus), default=POStatus.NEW)
+
+    # Итоги по PO (денежные поля считаем и держим для быстрого чтения)
+    subtotal: Mapped[float] = mapped_column(Float, default=0.0)         # sum(units * purchase_price)
+    sales_tax: Mapped[float] = mapped_column(Float, default=0.0)
+    shipping: Mapped[float] = mapped_column(Float, default=0.0)
+    discount: Mapped[float] = mapped_column(Float, default=0.0)
+    labeling_total: Mapped[float] = mapped_column(Float, default=0.0)   # суммарный Labeling/Prep
+    total_expense: Mapped[float] = mapped_column(Float, default=0.0)    # subtotal+tax+shipping-labeling? (ниже считаем)
+
+    items: Mapped[list["PurchaseOrderItem"]] = relationship(back_populates="po", cascade="all, delete-orphan")
+
+class PurchaseOrderItem(Base):
+    __tablename__ = "purchase_order_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    po_id: Mapped[int] = mapped_column(ForeignKey("purchase_orders.id"))
+    po: Mapped["PurchaseOrder"] = relationship(back_populates="items")
+
+    # Товарная часть
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    product: Mapped["Product"] = relationship()
+    asin: Mapped[str] = mapped_column(String, index=True)
+    listing_title: Mapped[str] = mapped_column(String)
+    amazon_link: Mapped[str | None] = mapped_column(String)
+    supplier_mfr_code: Mapped[str | None] = mapped_column(String)
+
+    quantity: Mapped[int] = mapped_column(Integer)
+    purchase_price: Mapped[float] = mapped_column(Float)  # $ за единицу (до tax/shipping/discount)
+    sales_tax: Mapped[float] = mapped_column(Float, default=0.0)  # item-level override (опц.), иначе распределим из PO
+    shipping: Mapped[float] = mapped_column(Float, default=0.0)   # item-level override (опц.), иначе распределим из PO
+    discount: Mapped[float] = mapped_column(Float, default=0.0)   # item-level item discount (опц.)
+
+    # Расчитанные поля (после апдейта PO)
+    unit_cogs: Mapped[float] = mapped_column(Float, default=0.0)        # итоговая себестоимость за 1 ед. с распределениями и labeling
+    extended_total: Mapped[float] = mapped_column(Float, default=0.0)   # unit_cogs * quantity
+
+class LabelingCost(Base):
+    __tablename__ = "labeling_costs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    po_item_id: Mapped[int] = mapped_column(ForeignKey("purchase_order_items.id"))
+    po_item: Mapped["PurchaseOrderItem"] = relationship()
+    note: Mapped[str | None] = mapped_column(String)
+    cost_total: Mapped[float] = mapped_column(Float, default=0.0)    # стоимость услуги на позицию целиком
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
